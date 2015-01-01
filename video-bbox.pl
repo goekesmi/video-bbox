@@ -93,6 +93,40 @@ sub which($) {
   return undef;
 }
 
+sub extract_frames_ffmpeg($$$$) {
+  my ($file, $start_sec, $end_sec, $frame_rate) = @_;
+
+  my $fn = $file;
+  $fn =~ s@^.*/@@s;
+
+  my $dir = sprintf ("%s/vbbox.%08x",
+                     ($ENV{TMPDIR} ? $ENV{TMPDIR} : "/tmp"),
+                     rand(0xFFFFFFFF));
+  $dir =~ s@//+@/@gs;
+
+  $rm_minus_rf = $dir;			# nuke it even at abnormal exits.
+  system ("rm", "-rf", $rm_minus_rf);
+
+  print STDERR "$progname: $fn: creating tmp dir: $dir\n" if ($verbose);
+  mkdir ($dir);
+
+  my $ff = $file;
+  $ff =~ s@([^-_.a-z\d/])@\\$1@gsi;
+  my @cmd = ("ffmpeg",
+             "-i", $ff,
+             "-r", $frame_rate,
+             "-ss",     $start_sec,
+             "$dir/image-%d.jpeg",
+             );
+
+  my $cmd = join (' ', @cmd);
+  print STDERR "$progname: exec: $cmd\n" if ($verbose);
+  $cmd = "$cmd >/dev/null 2>&1";
+
+  safe_system ($cmd);
+
+  return $dir;
+}
 
 sub extract_frames($$$$) {
   my ($file, $start_sec, $end_sec, $frame_rate) = @_;
@@ -228,6 +262,21 @@ sub bbox_mplayer($$) {
   return @ret;
 }
 
+sub bbox_ffmpeg($$) {
+  my ($file, $edit_p) = @_;
+
+  my $start_sec     = 10;	# start at N seconds
+  my $end_sec       = 90;	# end at N seconds (doesn't work)
+  my $frame_rate    = 0.1;	# N frames per second extracted
+  my $blur          = "0x5";	# blur image before comparing
+  my $fuzz          = "10%";	# color comparison slack
+  my ($xoff, $yoff) = (0, 0);	# lose N pixels from each edge first
+
+  my $dir = extract_frames_ffmpeg ($file, $start_sec, $end_sec, $frame_rate);
+  my @ret = scan_frames ($file, $dir, $fuzz, $xoff, $yoff, $edit_p);
+  system ("rm", "-rf", $dir);
+  return @ret;
+}
 
 # Here's another way to do it...
 #
@@ -260,6 +309,7 @@ sub bbox($$) {
   my @R;
   if    (which ("HandBrakeCLI")) { @R = bbox_handbrake ($file); }
   elsif (which ("mplayer"))      { @R = bbox_mplayer ($file, $edit_p); }
+  elsif (which ("ffmpeg"))      { @R = bbox_ffmpeg ($file, $edit_p); }
   else { error ("neither HandBrakeCLI nor mplayer found on \$PATH.");  }
 
   my ($ow, $oh, $maxw, $maxh, $miny, $minx, $y2, $x2) = @R;
